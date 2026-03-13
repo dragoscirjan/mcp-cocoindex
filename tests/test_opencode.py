@@ -16,7 +16,6 @@ Run with: uv run pytest tests/test_opencode.py -v
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -24,7 +23,7 @@ import psycopg
 import pytest
 
 from mcp_coco_index.config import CocoIndexConfig
-from mcp_coco_index.indexer import CocoIndexer, IndexInfo
+from mcp_coco_index.indexer import CocoIndexer
 
 
 # Skip all tests if PostgreSQL is not available

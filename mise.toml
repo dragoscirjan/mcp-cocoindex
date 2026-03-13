@@ -2,5 +2,6 @@
 experimental = true
 
 [tools]
+node = "22"
 python = "3.11"
 uv = "latest"

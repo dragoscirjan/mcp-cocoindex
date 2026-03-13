@@ -8,21 +8,11 @@ from dataclasses import dataclass, field
 class PostgresConfig:
     """PostgreSQL connection configuration."""
 
-    host: str = field(
-        default_factory=lambda: os.getenv("COCOINDEX_DB_HOST", "localhost")
-    )
-    port: int = field(
-        default_factory=lambda: int(os.getenv("COCOINDEX_DB_PORT", "5432"))
-    )
-    database: str = field(
-        default_factory=lambda: os.getenv("COCOINDEX_DB_NAME", "cocoindex")
-    )
-    user: str = field(
-        default_factory=lambda: os.getenv("COCOINDEX_DB_USER", "cocoindex")
-    )
-    password: str = field(
-        default_factory=lambda: os.getenv("COCOINDEX_DB_PASSWORD", "cocoindex")
-    )
+    host: str = field(default_factory=lambda: os.getenv("COCOINDEX_DB_HOST", "localhost"))
+    port: int = field(default_factory=lambda: int(os.getenv("COCOINDEX_DB_PORT", "5432")))
+    database: str = field(default_factory=lambda: os.getenv("COCOINDEX_DB_NAME", "cocoindex"))
+    user: str = field(default_factory=lambda: os.getenv("COCOINDEX_DB_USER", "cocoindex"))
+    password: str = field(default_factory=lambda: os.getenv("COCOINDEX_DB_PASSWORD", "cocoindex"))
 
     @property
     def connection_string(self) -> str:
@@ -37,9 +27,7 @@ class EmbeddingConfig:
     model_name: str = field(
         default_factory=lambda: os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
     )
-    dimensions: int = field(
-        default_factory=lambda: int(os.getenv("EMBEDDING_DIMENSIONS", "384"))
-    )
+    dimensions: int = field(default_factory=lambda: int(os.getenv("EMBEDDING_DIMENSIONS", "384")))
 
 
 @dataclass
@@ -48,9 +36,7 @@ class CocoIndexConfig:
 
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
-    data_dir: str = field(
-        default_factory=lambda: os.getenv("COCOINDEX_DATA_DIR", "/tmp/cocoindex")
-    )
+    data_dir: str = field(default_factory=lambda: os.getenv("COCOINDEX_DATA_DIR", "/tmp/cocoindex"))
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
 
     @classmethod

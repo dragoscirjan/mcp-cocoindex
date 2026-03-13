@@ -1,0 +1,332 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COCOINDEX_DB_HOST: localhost
+  COCOINDEX_DB_PORT: 5432
+  COCOINDEX_DB_NAME: cocoindex
+  COCOINDEX_DB_USER: cocoindex
+  COCOINDEX_DB_PASSWORD: cocoindex
+
+jobs:
+  # ============================================================================
+  # Lint & format check (no database required)
+  # ============================================================================
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: latest
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Check formatting
+        run: uv run ruff format --check src/ tests/
+
+      - name: Lint
+        run: uv run ruff check src/ tests/
+
+  # ============================================================================
+  # Unit tests (no database required)
+  # ============================================================================
+  test-unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: latest
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run unit tests
+        run: uv run pytest tests/test_config.py -v
+
+  # ============================================================================
+  # Integration tests (PostgreSQL + pgvector required)
+  # ============================================================================
+  test-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: cocoindex
+          POSTGRES_USER: cocoindex
+          POSTGRES_PASSWORD: cocoindex
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cocoindex -d cocoindex"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 10s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: latest
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run integration tests
+        run: uv run pytest tests/test_integration.py -v
+
+  # ============================================================================
+  # OpenCode MCP integration tests
+  # Tests the MCP tool interface as OpenCode would use it.
+  # Runs with OpenCode Zen's free gpt-5-nano model configured.
+  # Requires: OPENCODE_API_KEY secret (OpenCode Zen key — free tier available)
+  # ============================================================================
+  test-opencode:
+    name: OpenCode MCP Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: cocoindex
+          POSTGRES_USER: cocoindex
+          POSTGRES_PASSWORD: cocoindex
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cocoindex -d cocoindex"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 10s
+
+    env:
+      # OpenCode Zen — gpt-5-nano is free: https://opencode.ai/docs/zen
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: latest
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run OpenCode MCP tests
+        run: uv run pytest tests/test_opencode.py -v
+
+  # ============================================================================
+  # Gemini MCP integration tests
+  # Tests the MCP tool interface as a Gemini-backed client would use it.
+  # Runs with Gemini 2.0 Flash configured (Google AI Studio free tier).
+  # Requires: GOOGLE_GENERATIVE_AI_API_KEY secret (free tier at aistudio.google.com)
+  # ============================================================================
+  test-gemini:
+    name: Gemini MCP Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: cocoindex
+          POSTGRES_USER: cocoindex
+          POSTGRES_PASSWORD: cocoindex
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cocoindex -d cocoindex"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 10s
+
+    env:
+      # Google AI Studio — gemini-2.0-flash is free: https://aistudio.google.com
+      GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: latest
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Write Gemini MCP config
+        run: |
+          cat > .mcp.json <<'EOF'
+          {
+            "mcpServers": {
+              "mcp-coco-index": {
+                "command": "uv",
+                "args": ["run", "--project", "${{ github.workspace }}", "mcp-coco-index"],
+                "env": {
+                  "COCOINDEX_DB_HOST": "localhost",
+                  "COCOINDEX_DB_PORT": "5432",
+                  "COCOINDEX_DB_NAME": "cocoindex",
+                  "COCOINDEX_DB_USER": "cocoindex",
+                  "COCOINDEX_DB_PASSWORD": "cocoindex"
+                }
+              }
+            }
+          }
+          EOF
+
+      - name: Run Gemini MCP tests
+        # Reuses the claudecode test suite — same MCP tool interface,
+        # different provider credentials in environment
+        run: uv run pytest tests/test_claudecode.py -v
+
+  # ============================================================================
+  # ClaudeCode MCP integration tests (disabled — no credits available)
+  # ============================================================================
+  # test-claudecode:
+  #   name: ClaudeCode MCP Tests
+  #   runs-on: ubuntu-latest
+  #   services:
+  #     postgres:
+  #       image: pgvector/pgvector:pg17
+  #       env:
+  #         POSTGRES_DB: cocoindex
+  #         POSTGRES_USER: cocoindex
+  #         POSTGRES_PASSWORD: cocoindex
+  #       ports:
+  #         - 5432:5432
+  #       options: >-
+  #         --health-cmd "pg_isready -U cocoindex -d cocoindex"
+  #         --health-interval 10s
+  #         --health-timeout 5s
+  #         --health-retries 5
+  #         --health-start-period 10s
+  #   env:
+  #     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Install uv
+  #       uses: astral-sh/setup-uv@v5
+  #       with:
+  #         version: latest
+  #         enable-cache: true
+  #     - name: Set up Python
+  #       uses: actions/setup-python@v5
+  #       with:
+  #         python-version: "3.11"
+  #     - name: Install dependencies
+  #       run: uv sync --all-extras
+  #     - name: Run ClaudeCode MCP tests
+  #       run: uv run pytest tests/test_claudecode.py -v
+
+  # ============================================================================
+  # Copy-paste duplication check
+  # ============================================================================
+  jscpd:
+    name: Duplication Check (jscpd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run jscpd
+        run: npx jscpd src/
+
+  # ============================================================================
+  # Build check
+  # ============================================================================
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    needs: [lint, test-unit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: latest
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Build package
+        run: uv build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7

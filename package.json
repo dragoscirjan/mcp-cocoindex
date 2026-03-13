@@ -1,0 +1,19 @@
+{
+  "name": "mcp-cocoindex",
+  "version": "0.1.0",
+  "description": "Git hooks for mcp-cocoindex (husky + lint-staged)",
+  "private": true,
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.0.0",
+    "lint-staged": "^15.0.0"
+  },
+  "lint-staged": {
+    "*.py": [
+      "uv run ruff format",
+      "uv run ruff check --fix"
+    ]
+  }
+}

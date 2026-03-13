@@ -230,7 +230,28 @@ task list:indexes    # List all indexes
 task validate        # Full pipeline: format → lint → build → test → docs
 task clean           # Remove build artifacts and caches
 task clean:infra     # Stop containers and remove all volumes (destructive)
+
+task hooks           # Install git hooks (run once after cloning)
 ```
+
+### Git Hooks
+
+This project uses [husky](https://typicode.github.io/husky/) with [lint-staged](https://github.com/lint-staged/lint-staged) for pre-commit checks.
+
+After cloning, run:
+
+```bash
+task hooks
+```
+
+This installs Node dependencies and activates two hooks:
+
+| Hook | Action |
+|------|--------|
+| `pre-commit` | Runs `ruff format` + `ruff check --fix` on staged `*.py` files |
+| `post-commit` | Runs unit tests; integration tests if PostgreSQL is reachable |
+
+Hooks require Node.js (managed via `mise` — `node = "22"` in `mise.toml`).
 
 ### Running the Test Suite
 

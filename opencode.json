@@ -19,5 +19,24 @@
         "COCOINDEX_DB_PASSWORD": "cocoindex"
       }
     }
-  }
+  },
+  "provider": {
+    "opencode": {
+      "options": {
+        "apiKey": "{env:OPENCODE_API_KEY}"
+      },
+      "models": {
+        "gpt-5-nano": {}
+      }
+    },
+    "google": {
+      "options": {
+        "apiKey": "{env:GOOGLE_GENERATIVE_AI_API_KEY}"
+      },
+      "models": {
+        "gemini-2.0-flash": {}
+      }
+    }
+  },
+  "model": "google/gemini-2.0-flash"
 }

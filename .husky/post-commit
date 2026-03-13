@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"
+eval "$(mise activate bash --shims 2>/dev/null)" || true
+
+task test:unit
+
+if pg_isready -h "${COCOINDEX_DB_HOST:-localhost}" -p "${COCOINDEX_DB_PORT:-5432}" >/dev/null 2>&1; then
+  task test:integration test:opencode
+fi
