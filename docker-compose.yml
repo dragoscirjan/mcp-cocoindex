@@ -1,0 +1,40 @@
+# ============================================================================
+# CocoIndex MCP Server - PostgreSQL with pgvector
+# ============================================================================
+# Provides the database backend for CocoIndex code indexing and search.
+# The MCP server runs locally via `task dev` (not in Docker).
+#
+# Usage:
+#   docker compose -f docker-compose.yml up -d
+#   docker compose -f docker-compose.yml down
+#
+# Environment variables (see .env.example):
+#   COCOINDEX_DB_PORT     - PostgreSQL port (default: 5432)
+#   COCOINDEX_DB_NAME     - Database name (default: cocoindex)
+#   COCOINDEX_DB_USER     - Database user (default: cocoindex)
+#   COCOINDEX_DB_PASSWORD - Database password (default: cocoindex)
+# ============================================================================
+
+services:
+  cocoindex-postgres:
+    image: pgvector/pgvector:pg17
+    container_name: cocoindex-postgres
+    restart: unless-stopped
+    ports:
+      - '${COCOINDEX_DB_PORT:-5432}:5432'
+    environment:
+      POSTGRES_DB: ${COCOINDEX_DB_NAME:-cocoindex}
+      POSTGRES_USER: ${COCOINDEX_DB_USER:-cocoindex}
+      POSTGRES_PASSWORD: ${COCOINDEX_DB_PASSWORD:-cocoindex}
+    volumes:
+      - cocoindex-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${COCOINDEX_DB_USER:-cocoindex} -d ${COCOINDEX_DB_NAME:-cocoindex}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  cocoindex-pgdata:
+    driver: local

@@ -1,0 +1,44 @@
+[project]
+name = "mcp-coco-index"
+version = "0.1.0"
+description = "MCP server for CocoIndex - semantic code indexing and search"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "cocoindex[embeddings]>=0.1.43",
+    "psycopg[binary]>=3.1.0",
+    "pgvector>=0.3.0",
+    "sentence-transformers>=2.2.0",
+    "numpy>=1.24.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.4.0",
+    "pdoc>=14.0.0",
+]
+
+[project.scripts]
+mcp-coco-index = "mcp_coco_index.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_coco_index"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

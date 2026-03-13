@@ -1,0 +1,297 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+#
+# Standalone Taskfile for mcp-cocoindex.
+# Uses mise + uv for Python tooling, docker compose for infrastructure.
+#
+
+version: "3"
+
+dotenv:
+  - ".env"
+
+vars:
+  # --------------------------------------------------------------------------
+  # Mise execution wrappers (inlined from templates/mise/Taskfile.yml)
+  # --------------------------------------------------------------------------
+  __TF_MISE_E: "mise trust; mise exec --"
+  __TF_MISE_E_UV_RUN: "mise trust; mise exec -- uv run"
+
+  # --------------------------------------------------------------------------
+  # Database defaults (overridable via .env or environment)
+  # --------------------------------------------------------------------------
+  COCOINDEX_DB_HOST: '{{.COCOINDEX_DB_HOST | default "localhost"}}'
+  COCOINDEX_DB_PORT: '{{.COCOINDEX_DB_PORT | default "5432"}}'
+  COCOINDEX_DB_NAME: '{{.COCOINDEX_DB_NAME | default "cocoindex"}}'
+  COCOINDEX_DB_USER: '{{.COCOINDEX_DB_USER | default "cocoindex"}}'
+  COCOINDEX_DB_PASSWORD: '{{.COCOINDEX_DB_PASSWORD | default "cocoindex"}}'
+
+tasks:
+  # ==========================================================================
+  # Infrastructure tasks
+  # ==========================================================================
+
+  start:
+    desc: Start PostgreSQL+pgvector container
+    summary: |
+      Starts the PostgreSQL container with pgvector extension.
+      Port is configurable via COCOINDEX_DB_PORT (default: 5432).
+    cmds:
+      - docker compose -f docker-compose.yml up -d cocoindex-postgres 2>&1 || true
+      - |
+        echo "Waiting for PostgreSQL to be ready..."
+        for i in $(seq 1 30); do
+          if docker exec cocoindex-postgres pg_isready -U {{.COCOINDEX_DB_USER}} -d {{.COCOINDEX_DB_NAME}} >/dev/null 2>&1; then
+            echo "PostgreSQL is ready."
+            break
+          fi
+          echo "  Attempt $i/30..."
+          sleep 2
+        done
+      - docker ps --filter name=cocoindex-postgres --format "table {{`{{.Names}}`}}\t{{`{{.Status}}`}}\t{{`{{.Ports}}`}}"
+    silent: true
+
+  stop:
+    desc: Stop and remove PostgreSQL container
+    cmds:
+      - docker compose -f docker-compose.yml down
+    silent: true
+
+  logs:
+    desc: Follow logs from the PostgreSQL container
+    cmds:
+      - docker compose -f docker-compose.yml logs -f cocoindex-postgres
+    silent: true
+
+  clean:infra:
+    desc: Stop containers and remove all volumes (DESTROYS DATA)
+    cmds:
+      - docker compose -f docker-compose.yml down -v --remove-orphans
+    silent: true
+
+  # ==========================================================================
+  # Python build tasks (inlined from templates/py/Taskfile.yml)
+  # ==========================================================================
+
+  build:
+    desc: Build Python package
+    cmds:
+      - "{{.__TF_MISE_E}} uv build"
+    silent: true
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - |
+        rm -rf dist/ .ruff_cache/ .pytest_cache/ .coverage htmlcov/ .jscpd/
+        find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name '*.egg-info' -exec rm -rf {} + 2>/dev/null || true
+    silent: true
+
+  format:
+    desc: Format Python code (auto-fix)
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} ruff format src/ tests/"
+    silent: true
+
+  format:check:
+    desc: Check code formatting (no changes)
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} ruff format --check src/ tests/"
+    silent: true
+
+  lint:
+    desc: Lint Python code (auto-fix)
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} ruff check --fix src/ tests/"
+    silent: true
+
+  lint:check:
+    desc: Check linting (no auto-fix)
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} ruff check src/ tests/"
+    silent: true
+
+  test:
+    desc: Run all tests
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/ -v"
+    silent: true
+
+  test:unit:
+    desc: Run unit tests only (no infrastructure required)
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/test_config.py -v"
+    silent: true
+
+  test:integration:
+    desc: Run integration tests (requires PostgreSQL)
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/test_integration.py -v"
+    silent: true
+
+  test:opencode:
+    desc: Run OpenCode MCP integration tests (requires PostgreSQL)
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/test_opencode.py -v"
+    silent: true
+
+  test:claudecode:
+    desc: Run ClaudeCode MCP integration tests (requires PostgreSQL)
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/test_claudecode.py -v"
+    silent: true
+
+  test:coverage:
+    desc: Run tests with coverage report
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/ --cov=src --cov-report=html --cov-report=term-missing -v"
+      - echo "Coverage report generated in htmlcov/"
+    silent: true
+
+  docs:
+    desc: Generate API documentation
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} pdoc -o docs/ src/"
+      - echo "Documentation generated in docs/"
+    silent: true
+
+  validate:
+    desc: Run full validation pipeline (clean → format:check → lint:check → build → test → docs)
+    cmds:
+      - task: clean
+      - task: format:check
+      - task: lint:check
+      - task: build
+      - task: test
+      - task: docs
+      - |
+        echo "=============================================================="
+        echo "Validation successful"
+        echo "=============================================================="
+    silent: true
+
+  refresh:
+    desc: Refresh all project dependencies
+    cmds:
+      - "{{.__TF_MISE_E}} uv sync --all-extras"
+    silent: true
+
+  # ==========================================================================
+  # Development tasks
+  # ==========================================================================
+
+  dev:
+    desc: Run the MCP server in development mode (stdio transport)
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} mcp-coco-index"
+    silent: true
+
+  # ==========================================================================
+  # Indexing / search tasks
+  # ==========================================================================
+
+  index:
+    desc: Index this repository (mcp-cocoindex)
+    cmds:
+      - |
+        {{.__TF_MISE_E_UV_RUN}} python -c "
+        import asyncio, os, sys
+        from mcp_coco_index.config import CocoIndexConfig
+        from mcp_coco_index.indexer import CocoIndexer
+
+        async def main():
+            config = CocoIndexConfig.from_env()
+            indexer = CocoIndexer(config)
+            await indexer.initialize()
+            result = await indexer.index_repository(
+                repo_path=os.path.dirname(os.path.abspath('pyproject.toml')),
+                include_patterns=['**/*.py', '**/*.md', '**/*.yml', '**/*.yaml', '**/*.toml'],
+                exclude_patterns=['**/__pycache__/**', '**/.venv/**', '**/dist/**'],
+            )
+            print(f'Indexed {result.file_count} files, {result.chunk_count} chunks → index: {result.name}')
+            await indexer.close()
+
+        asyncio.run(main())
+        "
+    silent: true
+
+  index:repo:
+    desc: Index an arbitrary repository (REPO_PATH=<path>)
+    vars:
+      REPO_PATH: '{{.REPO_PATH | default "."}}'
+    cmds:
+      - |
+        {{.__TF_MISE_E_UV_RUN}} python -c "
+        import asyncio, sys
+        from mcp_coco_index.config import CocoIndexConfig
+        from mcp_coco_index.indexer import CocoIndexer
+
+        async def main():
+            config = CocoIndexConfig.from_env()
+            indexer = CocoIndexer(config)
+            await indexer.initialize()
+            result = await indexer.index_repository(
+                repo_path='{{.REPO_PATH}}',
+                include_patterns=['**/*.py', '**/*.md', '**/*.yml', '**/*.yaml', '**/*.toml'],
+                exclude_patterns=['**/__pycache__/**', '**/.venv/**', '**/dist/**'],
+            )
+            print(f'Indexed {result.file_count} files, {result.chunk_count} chunks → index: {result.name}')
+            await indexer.close()
+
+        asyncio.run(main())
+        "
+    silent: true
+
+  search:
+    desc: Search indexed code (QUERY=<search terms>)
+    vars:
+      QUERY: '{{.QUERY | default ""}}'
+    cmds:
+      - |
+        if [ -z "{{.QUERY}}" ]; then
+          echo "Usage: task search QUERY=\"your search terms\""
+          exit 1
+        fi
+        {{.__TF_MISE_E_UV_RUN}} python -c "
+        import asyncio, json
+        from mcp_coco_index.config import CocoIndexConfig
+        from mcp_coco_index.indexer import CocoIndexer
+
+        async def main():
+            config = CocoIndexConfig.from_env()
+            indexer = CocoIndexer(config)
+            await indexer.initialize()
+            results = await indexer.search('{{.QUERY}}', limit=10)
+            for r in results:
+                print(f'[{r.score:.3f}] {r.file_path}')
+                print(f'  {r.content[:120].strip()}')
+                print()
+            await indexer.close()
+
+        asyncio.run(main())
+        "
+    silent: true
+
+  list:indexes:
+    desc: List all available indexes
+    cmds:
+      - |
+        {{.__TF_MISE_E_UV_RUN}} python -c "
+        import asyncio
+        from mcp_coco_index.config import CocoIndexConfig
+        from mcp_coco_index.indexer import CocoIndexer
+
+        async def main():
+            config = CocoIndexConfig.from_env()
+            indexer = CocoIndexer(config)
+            await indexer.initialize()
+            indexes = await indexer.list_indexes()
+            if not indexes:
+                print('No indexes found.')
+            for idx in indexes:
+                print(f'  {idx.name}  ({idx.file_count} files, {idx.chunk_count} chunks)  path: {idx.repo_path}')
+            await indexer.close()
+
+        asyncio.run(main())
+        "
+    silent: true

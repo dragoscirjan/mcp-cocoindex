@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "mcp-coco-index": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "/home/dragosc/Workspace/gh--dragoscirjan/mcp-cocoindex",
+        "mcp-coco-index"
+      ],
+      "env": {
+        "COCOINDEX_DB_HOST": "localhost",
+        "COCOINDEX_DB_PORT": "5432",
+        "COCOINDEX_DB_NAME": "cocoindex",
+        "COCOINDEX_DB_USER": "cocoindex",
+        "COCOINDEX_DB_PASSWORD": "cocoindex"
+      }
+    }
+  }
+}

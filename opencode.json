@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mcp-coco-index": {
+      "type": "local",
+      "command": [
+        "uv",
+        "run",
+        "--project",
+        "/home/dragosc/Workspace/gh--dragoscirjan/mcp-cocoindex",
+        "mcp-coco-index"
+      ],
+      "enabled": true,
+      "environment": {
+        "COCOINDEX_DB_HOST": "localhost",
+        "COCOINDEX_DB_PORT": "5432",
+        "COCOINDEX_DB_NAME": "cocoindex",
+        "COCOINDEX_DB_USER": "cocoindex",
+        "COCOINDEX_DB_PASSWORD": "cocoindex"
+      }
+    }
+  }
+}
