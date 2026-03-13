@@ -180,6 +180,24 @@ tasks:
   # Development tasks
   # ==========================================================================
 
+  hooks:
+    desc: Install git hooks (husky + lint-staged) — run once after cloning
+    cmds:
+      - "{{.__TF_MISE_E}} npm install"
+    silent: true
+
+  jscpd:
+    desc: Check for copy-paste duplication in source code
+    cmds:
+      - "{{.__TF_MISE_E}} npx jscpd src/"
+    silent: true
+
+  licenses:
+    desc: List licenses of all installed Python dependencies
+    cmds:
+      - "{{.__TF_MISE_E_UV_RUN}} pip-licenses --order=license --format=table"
+    silent: true
+
   dev:
     desc: Run the MCP server in development mode (stdio transport)
     cmds:

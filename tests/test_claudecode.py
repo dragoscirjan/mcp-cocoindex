@@ -17,7 +17,6 @@ Run with: uv run pytest tests/test_claudecode.py -v
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import AsyncGenerator
 from pathlib import Path
 

@@ -1,0 +1,17 @@
+{
+  "threshold": 10,
+  "reporters": ["console"],
+  "ignore": [
+    "**/.venv/**",
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/__pycache__/**",
+    "**/*.egg-info/**",
+    "**/.git/**",
+    "**/htmlcov/**",
+    "**/.jscpd/**"
+  ],
+  "languages": ["python"],
+  "minLines": 5,
+  "minTokens": 50
+}

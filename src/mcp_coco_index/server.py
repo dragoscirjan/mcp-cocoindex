@@ -230,9 +230,7 @@ async def call_tool(  # pylint: disable=too-many-return-statements
                     content=[
                         TextContent(
                             type="text",
-                            text=json.dumps(
-                                {"error": f"Index '{arguments['name']}' not found"}
-                            ),
+                            text=json.dumps({"error": f"Index '{arguments['name']}' not found"}),
                         )
                     ],
                     isError=True,
