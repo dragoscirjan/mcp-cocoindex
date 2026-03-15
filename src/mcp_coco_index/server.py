@@ -128,6 +128,125 @@ TOOLS = [
             "required": ["name"],
         },
     ),
+    # Symbol indexing tools
+    Tool(
+        name="index_symbols",
+        description=(
+            "Index symbols (functions, classes, variables) from a code repository "
+            "using tree-sitter. Creates a searchable index of all code symbols "
+            "with their definitions and usages."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path to the repository to index",
+                },
+                "include_patterns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Glob patterns for files to include (e.g., '**/*.py')",
+                },
+                "exclude_patterns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Glob patterns for files to exclude",
+                },
+            },
+            "required": ["path"],
+        },
+    ),
+    Tool(
+        name="find_usages",
+        description=(
+            "Find all usages of a symbol (function, class, variable) across indexed code. "
+            "Returns locations where the symbol is referenced or called."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol_name": {
+                    "type": "string",
+                    "description": "Name of the symbol to find usages for",
+                },
+                "index_name": {
+                    "type": "string",
+                    "description": "Specific symbol index to search (optional, searches all)",
+                },
+                "exact_match": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, only exact matches; "
+                        "if false, includes partial matches (default: true)"
+                    ),
+                    "default": True,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 50)",
+                    "default": 50,
+                },
+            },
+            "required": ["symbol_name"],
+        },
+    ),
+    Tool(
+        name="find_definitions",
+        description=(
+            "Find where a symbol (function, class, variable) is defined in indexed code. "
+            "Returns the definition location(s) of the symbol."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol_name": {
+                    "type": "string",
+                    "description": "Name of the symbol to find the definition for",
+                },
+                "index_name": {
+                    "type": "string",
+                    "description": "Specific symbol index to search (optional, searches all)",
+                },
+                "exact_match": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, only exact matches; "
+                        "if false, includes partial matches (default: true)"
+                    ),
+                    "default": True,
+                },
+            },
+            "required": ["symbol_name"],
+        },
+    ),
+    Tool(
+        name="list_symbols",
+        description=(
+            "List all unique symbols found in indexed code. "
+            "Useful for exploring what functions, classes, and variables exist in a codebase."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "index_name": {
+                    "type": "string",
+                    "description": "Specific symbol index to query (optional, queries all)",
+                },
+                "symbol_kind": {
+                    "type": "string",
+                    "description": (
+                        "Filter by symbol kind (e.g., 'function', 'class', 'variable', 'method')"
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of symbols to return (default: 100)",
+                    "default": 100,
+                },
+            },
+        },
+    ),
 ]
 
 
@@ -265,6 +384,133 @@ async def call_tool(  # pylint: disable=too-many-return-statements
                                 if success
                                 else "Failed to delete index",
                             }
+                        ),
+                    )
+                ],
+            )
+
+        # Symbol indexing tools
+        if name == "index_symbols":
+            result = await indexer.index_symbols(
+                repo_path=arguments["path"],
+                include_patterns=arguments.get("include_patterns"),
+                exclude_patterns=arguments.get("exclude_patterns"),
+            )
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=json.dumps(
+                            {
+                                "success": True,
+                                "index_name": result.name,
+                                "repository_path": result.repository_path,
+                                "file_count": result.file_count,
+                                "symbol_count": result.symbol_count,
+                            },
+                            indent=2,
+                        ),
+                    )
+                ],
+            )
+
+        if name == "find_usages":
+            # exact_match=True means pattern=False (exact), exact_match=False means pattern=True
+            pattern = not arguments.get("exact_match", True)
+            results = await indexer.find_usages(
+                symbol_name=arguments["symbol_name"],
+                index_name=arguments.get("index_name"),
+                pattern=pattern,
+                limit=arguments.get("limit", 50),
+            )
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=json.dumps(
+                            {
+                                "symbol": arguments["symbol_name"],
+                                "usage_count": len(results),
+                                "usages": [
+                                    {
+                                        "file_path": r.file_path,
+                                        "line": r.line,
+                                        "column": r.column,
+                                        "symbol_name": r.symbol_name,
+                                        "symbol_kind": r.symbol_kind,
+                                        "category": r.category,
+                                        "context": r.context,
+                                    }
+                                    for r in results
+                                ],
+                            },
+                            indent=2,
+                        ),
+                    )
+                ],
+            )
+
+        if name == "find_definitions":
+            # exact_match=True means pattern=False (exact), exact_match=False means pattern=True
+            pattern = not arguments.get("exact_match", True)
+            # find_definitions doesn't have pattern param, uses find_usages internally
+            results = await indexer.find_usages(
+                symbol_name=arguments["symbol_name"],
+                index_name=arguments.get("index_name"),
+                category="definition",
+                pattern=pattern,
+            )
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=json.dumps(
+                            {
+                                "symbol": arguments["symbol_name"],
+                                "definition_count": len(results),
+                                "definitions": [
+                                    {
+                                        "file_path": r.file_path,
+                                        "line": r.line,
+                                        "column": r.column,
+                                        "symbol_name": r.symbol_name,
+                                        "symbol_kind": r.symbol_kind,
+                                        "context": r.context,
+                                    }
+                                    for r in results
+                                ],
+                            },
+                            indent=2,
+                        ),
+                    )
+                ],
+            )
+
+        if name == "list_symbols":
+            results = await indexer.list_symbols(
+                index_name=arguments.get("index_name"),
+                kind=arguments.get("symbol_kind"),
+                limit=arguments.get("limit", 100),
+            )
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=json.dumps(
+                            {
+                                "symbol_count": len(results),
+                                "symbols": [
+                                    {
+                                        "symbol_name": r["symbol_name"],
+                                        "symbol_kind": r["symbol_kind"],
+                                        "total_count": r["total_count"],
+                                        "definition_count": r["definition_count"],
+                                        "reference_count": r["reference_count"],
+                                    }
+                                    for r in results
+                                ],
+                            },
+                            indent=2,
                         ),
                     )
                 ],

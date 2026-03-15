@@ -114,44 +114,44 @@ tasks:
   test:
     desc: Run all tests
     cmds:
-      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/ -v"
+      - "{{.__TF_MISE_E_UV_RUN}} python -m pytest tests/ -v"
     silent: true
 
   test:unit:
     desc: Run unit tests only (no infrastructure required)
     cmds:
-      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/test_config.py -v"
+      - "{{.__TF_MISE_E_UV_RUN}} python -m pytest tests/test_config.py tests/test_analyzer.py -v"
     silent: true
 
   test:integration:
     desc: Run integration tests (requires PostgreSQL)
     cmds:
-      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/test_integration.py -v"
+      - "{{.__TF_MISE_E_UV_RUN}} python -m pytest tests/test_integration.py -v"
     silent: true
 
   test:opencode:
     desc: Run OpenCode MCP integration tests (requires PostgreSQL)
     cmds:
-      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/test_opencode.py -v"
+      - "{{.__TF_MISE_E_UV_RUN}} python -m pytest tests/test_opencode.py -v"
     silent: true
 
   test:claudecode:
     desc: Run ClaudeCode MCP integration tests (requires PostgreSQL)
     cmds:
-      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/test_claudecode.py -v"
+      - "{{.__TF_MISE_E_UV_RUN}} python -m pytest tests/test_claudecode.py -v"
     silent: true
 
   test:coverage:
     desc: Run tests with coverage report
     cmds:
-      - "{{.__TF_MISE_E_UV_RUN}} pytest tests/ --cov=src --cov-report=html --cov-report=term-missing -v"
+      - "{{.__TF_MISE_E_UV_RUN}} python -m pytest tests/ --cov=src --cov-report=html --cov-report=term-missing -v"
       - echo "Coverage report generated in htmlcov/"
     silent: true
 
   docs:
     desc: Generate API documentation
     cmds:
-      - "{{.__TF_MISE_E_UV_RUN}} pdoc -o docs/ src/"
+      - "{{.__TF_MISE_E_UV_RUN}} python -m pdoc -o docs/ src/"
       - echo "Documentation generated in docs/"
     silent: true
 

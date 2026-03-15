@@ -513,3 +513,224 @@ class TestMCPServer:
         assert result.isError is True
         data = json.loads(result.content[0].text)
         assert "error" in data
+
+
+class TestSymbolIndexing:
+    """Integration tests for symbol indexing functionality."""
+
+    @pytest.mark.asyncio
+    async def test_index_symbols(self, indexer: CocoIndexer, sample_repo: Path) -> None:
+        """Test indexing symbols from a repository."""
+        try:
+            result = await indexer.index_symbols(str(sample_repo))
+
+            assert result.name is not None
+            assert result.repository_path == str(sample_repo)
+            assert result.file_count >= 1
+            assert result.symbol_count >= 1  # Should find at least some symbols
+
+        finally:
+            # Cleanup
+            index_name = indexer._get_index_name(str(sample_repo))
+            await indexer.delete_symbol_index(index_name)
+
+    @pytest.mark.asyncio
+    async def test_find_usages(self, indexer: CocoIndexer, sample_repo: Path) -> None:
+        """Test finding all usages of a symbol."""
+        try:
+            # First index symbols
+            await indexer.index_symbols(str(sample_repo))
+
+            # Find usages of 'authenticate_user' function
+            results = await indexer.find_usages("authenticate_user")
+
+            # Should find at least the definition
+            assert len(results) >= 1
+            assert any(r.symbol_name == "authenticate_user" for r in results)
+            assert any(r.category == "definition" for r in results)
+
+        finally:
+            index_name = indexer._get_index_name(str(sample_repo))
+            await indexer.delete_symbol_index(index_name)
+
+    @pytest.mark.asyncio
+    async def test_find_definitions(self, indexer: CocoIndexer, sample_repo: Path) -> None:
+        """Test finding symbol definitions."""
+        try:
+            await indexer.index_symbols(str(sample_repo))
+
+            # Find definition of 'UserService' class
+            results = await indexer.find_definitions("UserService")
+
+            # Should find the class definition
+            assert len(results) >= 1
+            assert all(r.category == "definition" for r in results)
+            assert any(r.symbol_name == "UserService" for r in results)
+
+        finally:
+            index_name = indexer._get_index_name(str(sample_repo))
+            await indexer.delete_symbol_index(index_name)
+
+    @pytest.mark.asyncio
+    async def test_list_symbols(self, indexer: CocoIndexer, sample_repo: Path) -> None:
+        """Test listing all symbols in an index."""
+        try:
+            await indexer.index_symbols(str(sample_repo))
+            index_name = indexer._get_index_name(str(sample_repo))
+
+            results = await indexer.list_symbols(index_name=index_name)
+
+            # Should find multiple symbols
+            assert len(results) >= 1
+            # Check that results have expected structure
+            assert all("symbol_name" in r for r in results)
+            assert all("symbol_kind" in r for r in results)
+            assert all("total_count" in r for r in results)
+
+        finally:
+            await indexer.delete_symbol_index(index_name)
+
+    @pytest.mark.asyncio
+    async def test_find_usages_with_pattern(self, indexer: CocoIndexer, sample_repo: Path) -> None:
+        """Test finding usages with pattern matching."""
+        try:
+            await indexer.index_symbols(str(sample_repo))
+
+            # Find all symbols containing 'user' (case sensitive in SQL LIKE)
+            results = await indexer.find_usages("%user%", pattern=True)
+
+            # Should find multiple user-related symbols
+            assert len(results) >= 1
+
+        finally:
+            index_name = indexer._get_index_name(str(sample_repo))
+            await indexer.delete_symbol_index(index_name)
+
+    @pytest.mark.asyncio
+    async def test_symbol_index_info(self, indexer: CocoIndexer, sample_repo: Path) -> None:
+        """Test getting symbol index information."""
+        try:
+            await indexer.index_symbols(str(sample_repo))
+            index_name = indexer._get_index_name(str(sample_repo))
+
+            info = await indexer.get_symbol_index(index_name)
+
+            assert info is not None
+            assert info.name == index_name
+            assert info.repository_path == str(sample_repo)
+            assert info.file_count >= 1
+            assert info.symbol_count >= 1
+
+        finally:
+            await indexer.delete_symbol_index(index_name)
+
+    @pytest.mark.asyncio
+    async def test_delete_symbol_index(self, indexer: CocoIndexer, sample_repo: Path) -> None:
+        """Test deleting a symbol index."""
+        await indexer.index_symbols(str(sample_repo))
+        index_name = indexer._get_index_name(str(sample_repo))
+
+        # Verify index exists
+        info = await indexer.get_symbol_index(index_name)
+        assert info is not None
+
+        # Delete it
+        success = await indexer.delete_symbol_index(index_name)
+        assert success is True
+
+        # Verify it's gone
+        info = await indexer.get_symbol_index(index_name)
+        assert info is None
+
+
+class TestSymbolIndexingServerTools:
+    """Integration tests for symbol indexing MCP server tools."""
+
+    @pytest.mark.asyncio
+    async def test_server_tool_index_symbols(self, indexer: CocoIndexer, sample_repo: Path) -> None:
+        """Test the index_symbols tool through the server interface."""
+        from mcp_coco_index.server import call_tool
+
+        try:
+            result = await call_tool("index_symbols", {"path": str(sample_repo)})
+
+            assert result.isError is not True
+            data = json.loads(result.content[0].text)
+            assert data["success"] is True
+            assert "index_name" in data
+            assert data["file_count"] >= 1
+            assert data["symbol_count"] >= 1
+
+        finally:
+            index_name = indexer._get_index_name(str(sample_repo))
+            await indexer.delete_symbol_index(index_name)
+
+    @pytest.mark.asyncio
+    async def test_server_tool_find_usages(self, indexer: CocoIndexer, sample_repo: Path) -> None:
+        """Test the find_usages tool through the server interface."""
+        from mcp_coco_index.server import call_tool
+
+        try:
+            # First index symbols
+            await indexer.index_symbols(str(sample_repo))
+
+            result = await call_tool(
+                "find_usages", {"symbol_name": "authenticate_user", "exact_match": True}
+            )
+
+            assert result.isError is not True
+            data = json.loads(result.content[0].text)
+            assert "usages" in data
+            assert data["usage_count"] >= 1
+
+        finally:
+            index_name = indexer._get_index_name(str(sample_repo))
+            await indexer.delete_symbol_index(index_name)
+
+    @pytest.mark.asyncio
+    async def test_server_tool_find_definitions(
+        self, indexer: CocoIndexer, sample_repo: Path
+    ) -> None:
+        """Test the find_definitions tool through the server interface."""
+        from mcp_coco_index.server import call_tool
+
+        try:
+            await indexer.index_symbols(str(sample_repo))
+
+            result = await call_tool(
+                "find_definitions", {"symbol_name": "UserService", "exact_match": True}
+            )
+
+            assert result.isError is not True
+            data = json.loads(result.content[0].text)
+            assert "definitions" in data
+            assert data["definition_count"] >= 1
+
+        finally:
+            index_name = indexer._get_index_name(str(sample_repo))
+            await indexer.delete_symbol_index(index_name)
+
+    @pytest.mark.asyncio
+    async def test_server_tool_list_symbols(self, indexer: CocoIndexer, sample_repo: Path) -> None:
+        """Test the list_symbols tool through the server interface."""
+        from mcp_coco_index.server import call_tool
+
+        try:
+            await indexer.index_symbols(str(sample_repo))
+
+            result = await call_tool("list_symbols", {"limit": 50})
+
+            assert result.isError is not True
+            data = json.loads(result.content[0].text)
+            assert "symbols" in data
+            assert data["symbol_count"] >= 1
+            # Check symbol structure
+            if len(data["symbols"]) > 0:
+                sym = data["symbols"][0]
+                assert "symbol_name" in sym
+                assert "symbol_kind" in sym
+                assert "total_count" in sym
+
+        finally:
+            index_name = indexer._get_index_name(str(sample_repo))
+            await indexer.delete_symbol_index(index_name)

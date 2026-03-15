@@ -1,7 +1,7 @@
 [project]
 name = "mcp-coco-index"
-version = "0.1.0"
-description = "MCP server for CocoIndex - semantic code indexing and search"
+version = "0.2.0"
+description = "MCP server for CocoIndex - semantic code indexing, search, and structural symbol analysis"
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.0.0",
@@ -11,6 +11,9 @@ dependencies = [
     "sentence-transformers>=2.2.0",
     "numpy>=1.24.0",
     "pydantic>=2.0.0",
+    # Tree-sitter for structural code analysis
+    "tree-sitter>=0.24.0",
+    "tree-sitter-language-pack>=0.6.0",
 ]
 
 [project.optional-dependencies]

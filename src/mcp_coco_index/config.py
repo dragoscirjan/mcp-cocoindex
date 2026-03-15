@@ -31,11 +31,44 @@ class EmbeddingConfig:
 
 
 @dataclass
+class LlmConfig:
+    """LLM configuration for symbol extraction fallback (non-tree-sitter languages).
+
+    Supported api_type values (maps to cocoindex.LlmApiType):
+    - "openrouter" - OpenRouter API (requires LLM_API_KEY)
+    - "openai" - OpenAI API (requires LLM_API_KEY)
+    - "anthropic" - Anthropic API (requires LLM_API_KEY)
+    - "ollama" - Local Ollama (no API key needed, uses LLM_ADDRESS)
+    - "gemini" - Google Gemini (requires LLM_API_KEY)
+    - "azure_openai" - Azure OpenAI (requires LLM_API_KEY)
+    - "bedrock" - AWS Bedrock
+    - "vertex_ai" - Google Vertex AI
+    - "vllm" - vLLM server (uses LLM_ADDRESS)
+    - "litellm" - LiteLLM proxy
+    """
+
+    api_type: str = field(default_factory=lambda: os.getenv("LLM_API_TYPE", "ollama"))
+    model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "llama3.2"))
+    api_key: str | None = field(default_factory=lambda: os.getenv("LLM_API_KEY"))
+    address: str | None = field(default_factory=lambda: os.getenv("LLM_ADDRESS"))
+
+    @property
+    def is_configured(self) -> bool:
+        """Check if LLM is properly configured for use."""
+        # Ollama and vLLM don't require API keys
+        if self.api_type in ("ollama", "vllm"):
+            return True
+        # Cloud providers require API keys
+        return self.api_key is not None
+
+
+@dataclass
 class CocoIndexConfig:
     """Main configuration for CocoIndex MCP server."""
 
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    llm: LlmConfig = field(default_factory=LlmConfig)
     data_dir: str = field(default_factory=lambda: os.getenv("COCOINDEX_DATA_DIR", "/tmp/cocoindex"))
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
 

@@ -9,9 +9,14 @@ from typing import Any
 import cocoindex
 import cocoindex.flow as _cocoindex_flow
 import psycopg
-from cocoindex import DataSlice
 from pgvector.psycopg import register_vector
+from psycopg import sql
 
+from .analyzer import (
+    detect_language,
+    extract_symbols_from_file,
+    has_tree_sitter_support,
+)
 from .config import CocoIndexConfig
 
 logger = logging.getLogger(__name__)
@@ -40,6 +45,32 @@ class IndexInfo:
     created_at: str | None = None
 
 
+@dataclass
+class SymbolSearchResult:
+    """A single symbol search result."""
+
+    file_path: str
+    symbol_name: str
+    symbol_kind: str
+    category: str
+    line: int
+    column: int
+    context: str
+    parent_name: str | None = None
+
+
+@dataclass
+class SymbolIndexInfo:
+    """Information about a symbol index."""
+
+    name: str
+    repository_path: str
+    file_count: int
+    symbol_count: int
+    definition_count: int
+    reference_count: int
+
+
 # Default embedding model
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
@@ -47,8 +78,8 @@ DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 # Transform flow for generating embeddings - can be used at index and query time
 @cocoindex.transform_flow()
 def text_to_embedding(
-    text: DataSlice[str],
-) -> DataSlice[list[float]]:
+    text: cocoindex.DataSlice[str],
+) -> cocoindex.DataSlice[list[float]]:
     """Transform text to embedding vector."""
     return text.transform(
         cocoindex.functions.SentenceTransformerEmbed(model=DEFAULT_EMBEDDING_MODEL)
@@ -465,4 +496,601 @@ class CocoIndexer:
             return True
         except Exception as e:
             logger.error("Failed to delete index %s: %s", index_name, e)
+            return False
+
+    # =========================================================================
+    # Symbol Indexing Methods (Tree-sitter based structural analysis)
+    # =========================================================================
+
+    async def index_symbols(
+        self,
+        repo_path: str,
+        include_patterns: list[str] | None = None,
+        exclude_patterns: list[str] | None = None,
+        use_llm: bool = False,
+    ) -> SymbolIndexInfo:
+        """
+        Index a repository for structural symbol analysis using tree-sitter.
+
+        Args:
+            repo_path: Path to the repository to index
+            include_patterns: Glob patterns for files to include
+            exclude_patterns: Glob patterns for files to exclude
+            use_llm: Whether to use LLM for languages without tree-sitter support
+
+        Returns:
+            Information about the created symbol index
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        repo_path = str(Path(repo_path).resolve())
+        index_name = self._get_index_name(repo_path)
+
+        # Default patterns for code files
+        if include_patterns is None:
+            include_patterns = [
+                "**/*.py",
+                "**/*.js",
+                "**/*.ts",
+                "**/*.tsx",
+                "**/*.jsx",
+                "**/*.go",
+                "**/*.rs",
+                "**/*.java",
+                "**/*.c",
+                "**/*.cpp",
+                "**/*.h",
+                "**/*.hpp",
+                "**/*.cs",
+                "**/*.rb",
+                "**/*.php",
+                "**/*.swift",
+                "**/*.kt",
+                "**/*.scala",
+            ]
+
+        if exclude_patterns is None:
+            exclude_patterns = [
+                "**/node_modules/**",
+                "**/.git/**",
+                "**/vendor/**",
+                "**/dist/**",
+                "**/build/**",
+                "**/__pycache__/**",
+                "**/.venv/**",
+                "**/venv/**",
+            ]
+
+        logger.info("Indexing symbols for repository: %s as %s", repo_path, index_name)
+
+        # Create the symbol index table directly (not using CocoIndex flow for now
+        # because tree-sitter parsing needs to happen in Python, not Rust engine)
+        symbol_table = f"symbol_index_{index_name}"
+
+        with psycopg.connect(self.config.postgres.connection_string) as conn:
+            with conn.cursor() as cur:
+                # Create the symbol table
+                cur.execute(
+                    sql.SQL(
+                        """
+                    CREATE TABLE IF NOT EXISTS {} (
+                        file_path TEXT NOT NULL,
+                        symbol_name TEXT NOT NULL,
+                        symbol_kind TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        line INTEGER NOT NULL,
+                        col INTEGER NOT NULL,
+                        end_line INTEGER NOT NULL,
+                        end_col INTEGER NOT NULL,
+                        context TEXT,
+                        parent_name TEXT,
+                        parent_kind TEXT,
+                        PRIMARY KEY (file_path, line, col, symbol_name)
+                    )
+                """
+                    ).format(sql.Identifier(symbol_table))
+                )
+
+                # Create indexes for fast lookups
+                cur.execute(
+                    sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} (symbol_name)").format(
+                        sql.Identifier(f"idx_{symbol_table}_name"),
+                        sql.Identifier(symbol_table),
+                    )
+                )
+                cur.execute(
+                    sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} (symbol_kind, category)").format(
+                        sql.Identifier(f"idx_{symbol_table}_kind"),
+                        sql.Identifier(symbol_table),
+                    )
+                )
+                cur.execute(
+                    sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} (file_path)").format(
+                        sql.Identifier(f"idx_{symbol_table}_file"),
+                        sql.Identifier(symbol_table),
+                    )
+                )
+
+                # Clear existing data for this index
+                cur.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier(symbol_table)))
+
+            conn.commit()
+
+        # Process files
+        file_count = 0
+        symbol_count = 0
+        definition_count = 0
+        reference_count = 0
+
+        # Find all matching files
+        import fnmatch
+        from pathlib import Path as PathLib
+
+        repo_root = PathLib(repo_path)
+        all_files: list[PathLib] = []
+
+        for pattern in include_patterns:
+            all_files.extend(repo_root.glob(pattern))
+
+        # Filter out excluded files
+        filtered_files: list[PathLib] = []
+        for file_path in all_files:
+            rel_path = str(file_path.relative_to(repo_root))
+            excluded = False
+            for exclude_pattern in exclude_patterns:
+                if fnmatch.fnmatch(rel_path, exclude_pattern):
+                    excluded = True
+                    break
+            if not excluded and file_path.is_file():
+                filtered_files.append(file_path)
+
+        # Process each file
+        symbols_batch: list[tuple[Any, ...]] = []
+        batch_size = 100
+
+        for file_path in filtered_files:
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+                rel_path = str(file_path.relative_to(repo_root))
+
+                # Check if language is supported
+                language = detect_language(rel_path)
+
+                if has_tree_sitter_support(language):
+                    # Use tree-sitter extraction
+                    symbols = extract_symbols_from_file(content, rel_path)
+                elif use_llm and self.config.llm.is_configured:
+                    # LLM fallback (to be implemented)
+                    # For now, skip
+                    logger.debug("LLM extraction not yet implemented for %s", rel_path)
+                    symbols = []
+                else:
+                    symbols = []
+
+                if symbols:
+                    file_count += 1
+                    for sym in symbols:
+                        symbol_count += 1
+                        if sym.category == "definition":
+                            definition_count += 1
+                        else:
+                            reference_count += 1
+
+                        symbols_batch.append(
+                            (
+                                rel_path,
+                                sym.name,
+                                sym.kind,
+                                sym.category,
+                                sym.line,
+                                sym.column,
+                                sym.end_line,
+                                sym.end_column,
+                                sym.context[:500] if sym.context else None,  # Truncate context
+                                sym.parent_name,
+                                sym.parent_kind,
+                            )
+                        )
+
+                        if len(symbols_batch) >= batch_size:
+                            self._insert_symbols_batch(symbol_table, symbols_batch)
+                            symbols_batch = []
+
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Failed to process %s: %s", file_path, e)
+
+        # Insert remaining symbols
+        if symbols_batch:
+            self._insert_symbols_batch(symbol_table, symbols_batch)
+
+        # Store metadata about this symbol index
+        self._flows[f"symbols_{index_name}"] = {
+            "type": "symbol_index",
+            "repo_path": repo_path,
+            "table": symbol_table,
+        }
+
+        return SymbolIndexInfo(
+            name=index_name,
+            repository_path=repo_path,
+            file_count=file_count,
+            symbol_count=symbol_count,
+            definition_count=definition_count,
+            reference_count=reference_count,
+        )
+
+    def _insert_symbols_batch(self, table_name: str, symbols: list[tuple[Any, ...]]) -> None:
+        """Insert a batch of symbols into the database."""
+        if not symbols:
+            return
+
+        with psycopg.connect(self.config.postgres.connection_string) as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    sql.SQL(
+                        """
+                        INSERT INTO {} (
+                            file_path, symbol_name, symbol_kind, category,
+                            line, col, end_line, end_col,
+                            context, parent_name, parent_kind
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (file_path, line, col, symbol_name) DO UPDATE SET
+                            symbol_kind = EXCLUDED.symbol_kind,
+                            category = EXCLUDED.category,
+                            context = EXCLUDED.context,
+                            parent_name = EXCLUDED.parent_name,
+                            parent_kind = EXCLUDED.parent_kind
+                    """
+                    ).format(sql.Identifier(table_name)),
+                    symbols,
+                )
+            conn.commit()
+
+    async def find_usages(
+        self,
+        symbol_name: str,
+        index_name: str | None = None,
+        kind: str | None = None,
+        category: str | None = None,
+        pattern: bool = False,
+        limit: int = 100,
+    ) -> list[SymbolSearchResult]:
+        """
+        Find all usages of a symbol.
+
+        Args:
+            symbol_name: Symbol name to search for (exact match or LIKE pattern if pattern=True)
+            index_name: Specific index to search (or None for all)
+            kind: Filter by symbol kind (class, function, method, variable, attribute, etc.)
+            category: Filter by category (definition, reference)
+            pattern: If True, treat symbol_name as a SQL LIKE pattern (use % for wildcard)
+            limit: Maximum number of results
+
+        Returns:
+            List of symbol search results
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        results: list[SymbolSearchResult] = []
+
+        with psycopg.connect(self.config.postgres.connection_string) as conn:
+            with conn.cursor() as cur:
+                # Find symbol tables to search
+                if index_name:
+                    tables = [f"symbol_index_{index_name}"]
+                else:
+                    cur.execute(
+                        """
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_name LIKE 'symbol_index_%'
+                        AND table_schema = 'public'
+                    """
+                    )
+                    tables = [row[0] for row in cur.fetchall()]
+
+                for table in tables:
+                    try:
+                        # Build query with filters
+                        conditions = []
+                        params: list[Any] = []
+
+                        if pattern:
+                            conditions.append("symbol_name LIKE %s")
+                        else:
+                            conditions.append("symbol_name = %s")
+                        params.append(symbol_name)
+
+                        if kind:
+                            conditions.append("symbol_kind = %s")
+                            params.append(kind)
+
+                        if category:
+                            conditions.append("category = %s")
+                            params.append(category)
+
+                        where_clause = " AND ".join(conditions)
+                        params.append(limit)
+
+                        query = sql.SQL(
+                            """
+                            SELECT file_path, symbol_name, symbol_kind, category,
+                                   line, col, context, parent_name
+                            FROM {}
+                            WHERE {}
+                            ORDER BY file_path, line
+                            LIMIT %s
+                        """
+                        ).format(
+                            sql.Identifier(table),
+                            sql.SQL(where_clause),
+                        )
+
+                        cur.execute(query, params)
+
+                        for row in cur.fetchall():
+                            results.append(
+                                SymbolSearchResult(
+                                    file_path=row[0],
+                                    symbol_name=row[1],
+                                    symbol_kind=row[2],
+                                    category=row[3],
+                                    line=row[4],
+                                    column=row[5],
+                                    context=row[6] or "",
+                                    parent_name=row[7],
+                                )
+                            )
+                    except psycopg.Error as e:
+                        logger.warning("Failed to search table %s: %s", table, e)
+
+        return results[:limit]
+
+    async def find_definitions(
+        self,
+        symbol_name: str,
+        index_name: str | None = None,
+        kind: str | None = None,
+        limit: int = 50,
+    ) -> list[SymbolSearchResult]:
+        """
+        Find where a symbol is defined.
+
+        Args:
+            symbol_name: Symbol name to search for
+            index_name: Specific index to search (or None for all)
+            kind: Filter by symbol kind (class, function, method, etc.)
+            limit: Maximum number of results
+
+        Returns:
+            List of definition locations
+        """
+        return await self.find_usages(
+            symbol_name=symbol_name,
+            index_name=index_name,
+            kind=kind,
+            category="definition",
+            limit=limit,
+        )
+
+    async def list_symbols(
+        self,
+        index_name: str | None = None,
+        file_path: str | None = None,
+        kind: str | None = None,
+        pattern: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """
+        List symbols in an index with aggregated counts.
+
+        Args:
+            index_name: Specific index to search (or None for all)
+            file_path: Filter by file path
+            kind: Filter by symbol kind
+            pattern: LIKE pattern for symbol names
+            limit: Maximum number of results
+
+        Returns:
+            List of symbol summaries with counts
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        results: list[dict[str, Any]] = []
+
+        with psycopg.connect(self.config.postgres.connection_string) as conn:
+            with conn.cursor() as cur:
+                # Find symbol tables
+                if index_name:
+                    tables = [f"symbol_index_{index_name}"]
+                else:
+                    cur.execute(
+                        """
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_name LIKE 'symbol_index_%'
+                        AND table_schema = 'public'
+                    """
+                    )
+                    tables = [row[0] for row in cur.fetchall()]
+
+                for table in tables:
+                    try:
+                        conditions = []
+                        params: list[Any] = []
+
+                        if file_path:
+                            conditions.append("file_path = %s")
+                            params.append(file_path)
+
+                        if kind:
+                            conditions.append("symbol_kind = %s")
+                            params.append(kind)
+
+                        if pattern:
+                            conditions.append("symbol_name LIKE %s")
+                            params.append(pattern)
+
+                        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+                        params.append(limit)
+
+                        query = sql.SQL(
+                            """
+                            SELECT symbol_name, symbol_kind,
+                                   COUNT(*) as total_count,
+                                   SUM(CASE WHEN category = 'definition'
+                                       THEN 1 ELSE 0 END) as def_count,
+                                   SUM(CASE WHEN category = 'reference'
+                                       THEN 1 ELSE 0 END) as ref_count
+                            FROM {} {}
+                            GROUP BY symbol_name, symbol_kind
+                            ORDER BY total_count DESC
+                            LIMIT %s
+                        """
+                        ).format(
+                            sql.Identifier(table),
+                            sql.SQL(where_clause),
+                        )
+
+                        cur.execute(query, params)
+
+                        for row in cur.fetchall():
+                            results.append(
+                                {
+                                    "symbol_name": row[0],
+                                    "symbol_kind": row[1],
+                                    "total_count": row[2],
+                                    "definition_count": row[3],
+                                    "reference_count": row[4],
+                                    "index_name": table.replace("symbol_index_", ""),
+                                }
+                            )
+                    except psycopg.Error as e:
+                        logger.warning("Failed to list symbols from %s: %s", table, e)
+
+        # Sort by total count and limit
+        results.sort(key=lambda x: x["total_count"], reverse=True)
+        return results[:limit]
+
+    async def get_symbol_index(self, index_name: str) -> SymbolIndexInfo | None:
+        """Get information about a specific symbol index."""
+        if not self._initialized:
+            await self.initialize()
+
+        table_name = f"symbol_index_{index_name}"
+
+        try:
+            with psycopg.connect(self.config.postgres.connection_string) as conn:
+                with conn.cursor() as cur:
+                    # Check if table exists
+                    cur.execute(
+                        """
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables
+                            WHERE table_name = %s AND table_schema = 'public'
+                        )
+                    """,
+                        (table_name,),
+                    )
+                    exists = cur.fetchone()[0]  # type: ignore[index]
+                    if not exists:
+                        return None
+
+                    # Get counts
+                    cur.execute(
+                        sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier(table_name))
+                    )
+                    symbol_count = cur.fetchone()[0]  # type: ignore[index]
+
+                    cur.execute(
+                        sql.SQL("SELECT COUNT(DISTINCT file_path) FROM {}").format(
+                            sql.Identifier(table_name)
+                        )
+                    )
+                    file_count = cur.fetchone()[0]  # type: ignore[index]
+
+                    cur.execute(
+                        sql.SQL("SELECT COUNT(*) FROM {} WHERE category = 'definition'").format(
+                            sql.Identifier(table_name)
+                        )
+                    )
+                    definition_count = cur.fetchone()[0]  # type: ignore[index]
+
+                    cur.execute(
+                        sql.SQL("SELECT COUNT(*) FROM {} WHERE category = 'reference'").format(
+                            sql.Identifier(table_name)
+                        )
+                    )
+                    reference_count = cur.fetchone()[0]  # type: ignore[index]
+
+                    # Get repo path from metadata
+                    repo_path = self._flows.get(f"symbols_{index_name}", {}).get(
+                        "repo_path", "unknown"
+                    )
+
+                    return SymbolIndexInfo(
+                        name=index_name,
+                        repository_path=repo_path,
+                        file_count=file_count,
+                        symbol_count=symbol_count,
+                        definition_count=definition_count,
+                        reference_count=reference_count,
+                    )
+        except psycopg.Error as e:
+            logger.error("Failed to get symbol index info: %s", e)
+            return None
+
+    async def list_symbol_indexes(self) -> list[SymbolIndexInfo]:
+        """List all available symbol indexes."""
+        if not self._initialized:
+            await self.initialize()
+
+        indexes: list[SymbolIndexInfo] = []
+
+        try:
+            with psycopg.connect(self.config.postgres.connection_string) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_name LIKE 'symbol_index_%'
+                        AND table_schema = 'public'
+                    """
+                    )
+                    tables = [row[0] for row in cur.fetchall()]
+
+                    for table in tables:
+                        name = table.replace("symbol_index_", "")
+                        info = await self.get_symbol_index(name)
+                        if info:
+                            indexes.append(info)
+        except psycopg.Error as e:
+            logger.error("Failed to list symbol indexes: %s", e)
+
+        return indexes
+
+    async def delete_symbol_index(self, index_name: str) -> bool:
+        """Delete a symbol index."""
+        if not self._initialized:
+            await self.initialize()
+
+        table_name = f"symbol_index_{index_name}"
+
+        try:
+            with psycopg.connect(self.config.postgres.connection_string) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(table_name))
+                    )
+                conn.commit()
+
+            # Remove from flow registry
+            if f"symbols_{index_name}" in self._flows:
+                del self._flows[f"symbols_{index_name}"]
+
+            logger.info("Deleted symbol index: %s", index_name)
+            return True
+        except psycopg.Error as e:
+            logger.error("Failed to delete symbol index %s: %s", index_name, e)
             return False
