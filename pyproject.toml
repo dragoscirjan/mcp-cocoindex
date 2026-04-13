@@ -4,13 +4,13 @@ version = "0.1.0"
 description = "MCP server for CocoIndex - semantic code indexing and search"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.0.0",
-    "cocoindex[embeddings]>=0.1.43",
-    "psycopg[binary]>=3.1.0",
-    "pgvector>=0.3.0",
-    "sentence-transformers>=2.2.0",
-    "numpy>=1.24.0",
-    "pydantic>=2.0.0",
+    "mcp>=1.27.0",
+    "cocoindex[embeddings]>=0.3.37",
+    "psycopg[binary]>=3.3.3",
+    "pgvector>=0.4.2",
+    "sentence-transformers>=5.4.0",
+    "numpy>=2.4.4",
+    "pydantic>=2.12.5",
 ]
 
 [project.optional-dependencies]
